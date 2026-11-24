@@ -192,6 +192,30 @@ jobs:
             -J zap-sqli.json -r zap-sqli.html -x zap-sqli.xml -w zap-sqli.md \
             -I
 
+      - name: Set up Python for sqlmap
+        if: always()
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sqlmap
+        if: always()
+        run: pip install sqlmap
+
+      - name: Confirm SQL injection with sqlmap
+        if: always()
+        run: |
+          mkdir -p sqlmap-reports
+          SQLMAP_DIR=$(python -c "import sqlmap, os; print(os.path.dirname(sqlmap.__file__))")
+          python "$SQLMAP_DIR/sqlmap.py" \
+            -u http://localhost:5012/lab \
+            --data "username=admin&password=x" \
+            -p username --level=2 --risk=1 --batch --flush-session \
+            --output-dir=sqlmap-reports 2>&1 | tee sqlmap-reports/sqlmap.log
+          echo "--- sqlmap result ---"
+          grep -E "Parameter:|Type:|Title:|Payload:|back-end DBMS|injectable" \
+            sqlmap-reports/sqlmap.log || true
+
       - name: Show DAST alert summary
         if: always()
         run: |
@@ -235,4 +259,5 @@ jobs:
           name: dast-reports
           path: |
             zap-reports/
+            sqlmap-reports/
             logs/
