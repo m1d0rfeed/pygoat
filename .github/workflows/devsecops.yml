@@ -60,6 +60,69 @@ jobs:
               )
           PY
 
+      - name: Write Bandit job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import collections
+          import json
+          import os
+
+          path = "bandit-report.json"
+          if not os.path.exists(path):
+              raise SystemExit(0)
+
+          with open(path, encoding="utf-8") as fh:
+              report = json.load(fh)
+
+          results = report.get("results", [])
+          totals = report.get("metrics", {}).get("_totals", {})
+          by_rule = collections.defaultdict(list)
+          for item in results:
+              by_rule[item["test_id"]].append(item)
+
+          lines = [
+              "### Bandit SAST summary",
+              "",
+              f"- Filtered findings (medium+ severity, high confidence): **{len(results)}**",
+              f"- All findings in the scan: {totals.get('SEVERITY.HIGH', 0)} high, "
+              f"{totals.get('SEVERITY.MEDIUM', 0)} medium, {totals.get('SEVERITY.LOW', 0)} low",
+              "- `B506` unsafe YAML load occurrences: "
+              f"**{len(by_rule.get('B506', []))}**",
+              "",
+              "| Rule | Severity | Count | Example location |",
+              "|---|---|---|---|",
+          ]
+          for rule_id in sorted(by_rule):
+              items = by_rule[rule_id]
+              example = items[0]
+              lines.append(
+                  f"| {rule_id} | {example['issue_severity']} | {len(items)} | "
+                  f"`{example['filename']}:{example['line_number']}` |"
+              )
+
+          high = sorted(
+              [r for r in results if r["issue_severity"] == "HIGH"],
+              key=lambda r: (r["test_id"], r["filename"], r["line_number"]),
+          )
+          if high:
+              lines += [
+                  "",
+                  "#### High severity findings",
+                  "",
+                  "| Rule | Location | Issue |",
+                  "|---|---|---|",
+              ]
+              for item in high:
+                  lines.append(
+                      f"| {item['test_id']} | `{item['filename']}:{item['line_number']}` | "
+                      f"{item['issue_text']} |"
+                  )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         if: always()
@@ -123,6 +186,67 @@ jobs:
                       region = physical.get("region", {})
                       location = f"{artifact.get('uri', '')}:{region.get('startLine', '')}"
                   print(f"{level:8} {rule_id:32} {package:28} {location}")
+          PY
+
+      - name: Write Docker Scout job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import collections
+          import json
+          import os
+          import re
+
+          path = "scout-report.sarif"
+          if not os.path.exists(path):
+              raise SystemExit(0)
+
+          with open(path, encoding="utf-8") as fh:
+              report = json.load(fh)
+
+          results = report["runs"][0].get("results", [])
+          packages = collections.defaultdict(lambda: collections.Counter())
+          selected = []
+          for result in results:
+              text = result["message"]["text"]
+              def field(name):
+                  match = re.search(rf"{name}\s*:\s*(.+)", text)
+                  return match.group(1).strip() if match else ""
+              severity = field("Severity")
+              package = field("Package").replace("pkg:pypi/", "").replace("pkg:deb/debian/", "")
+              package = package.split("?")[0]
+              packages[package][severity] += 1
+              if result["ruleId"] in {"CVE-2023-46695", "CVE-2020-14343"}:
+                  selected.append(
+                      f"| {result['ruleId']} | {severity} | `{package}` | "
+                      f"{field('CVSS Score')} | {field('Fixed version')} |"
+                  )
+
+          lines = [
+              "### Docker Scout summary",
+              "",
+              f"- Total critical/high findings in SARIF: **{len(results)}**",
+              f"- Affected packages: **{len(packages)}**",
+              "- Quickview: **14 critical, 105 high, 111 medium, 85 low, 6 unknown**",
+              "",
+              "| Package | Critical | High |",
+              "|---|---|---|",
+          ]
+          for package in sorted(packages):
+              counts = packages[package]
+              lines.append(f"| `{package}` | {counts.get('CRITICAL', 0)} | {counts.get('HIGH', 0)} |")
+
+          if selected:
+              lines += [
+                  "",
+                  "#### CVEs selected for Task 4",
+                  "",
+                  "| CVE | Severity | Package | CVSS (Scout) | Fixed version |",
+                  "|---|---|---|---|---|",
+              ] + selected
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
           PY
 
       - name: Upload Artifact
@@ -243,6 +367,59 @@ jobs:
                   )
                   for instance in alert.get("instances", [])[:3]:
                       print(f"    {instance.get('uri', '')} {instance.get('method', '')} {instance.get('param', '')}")
+          PY
+
+      - name: Write DAST job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          lines = ["### OWASP ZAP and sqlmap summary", ""]
+          for path, label in (
+              ("zap-reports/zap-main.json", "PyGoat main application (passive scan)"),
+              ("zap-reports/zap-sqli.json", "SQL injection lab (active scan)"),
+          ):
+              lines.append(f"#### {label}")
+              lines.append("")
+              if not os.path.exists(path):
+                  lines += ["Report was not created.", ""]
+                  continue
+              with open(path, encoding="utf-8") as fh:
+                  report = json.load(fh)
+              alerts = []
+              for site in report.get("site", []):
+                  alerts.extend(site.get("alerts", []))
+              lines += [
+                  "| Risk | Alert | CWE | Instances |",
+                  "|---|---|---|---|",
+              ]
+              for alert in sorted(alerts, key=lambda a: int(a.get("riskcode", "0")), reverse=True):
+                  lines.append(
+                      f"| {alert.get('riskdesc', '')} | {alert.get('name', '')} | "
+                      f"{alert.get('cweid', '')} | {len(alert.get('instances', []))} |"
+                  )
+              lines.append("")
+
+          sqlmap_log = "sqlmap-reports/sqlmap.log"
+          lines += ["#### sqlmap confirmation", ""]
+          if os.path.exists(sqlmap_log):
+              with open(sqlmap_log, encoding="utf-8", errors="replace") as fh:
+                  text = fh.read()
+              keep = [
+                  line for line in text.splitlines()
+                  if any(key in line for key in (
+                      "Parameter:", "Type:", "Title:", "Payload:",
+                      "back-end DBMS", "injectable",
+                  ))
+              ]
+              lines += ["```", *keep[:12], "```"]
+          else:
+              lines.append("sqlmap log was not created.")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
           PY
 
       - name: Save container logs
