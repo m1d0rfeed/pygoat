@@ -158,7 +158,7 @@ jobs:
           docker run -d --name pygoat-sqli -p 5012:5012 pygoat-sqli-lab:latest
 
           echo "Waiting for PyGoat on port 8000..."
-          timeout 180 bash -c 'until curl -s -o /dev/null http://localhost:8000/login/; do sleep 2; done'
+          timeout 180 bash -c 'until curl -fsS -o /dev/null http://localhost:8000/login/; do sleep 2; done'
           echo "Waiting for the SQL injection lab on port 5012..."
           timeout 120 bash -c 'until curl -fsS http://localhost:5012/health; do sleep 2; done'
 
@@ -181,7 +181,9 @@ jobs:
         if: always()
         run: |
           mkdir -p zap-reports
-          chmod -R 777 zap-reports
+          # The previous ZAP container writes its reports as root, so do not
+          # run chmod on that directory here. The directory itself is already
+          # writable and ZAP only needs to create new files in it.
           docker run --rm --network host \
             -v "$PWD/zap-reports:/zap/wrk:rw" \
             zaproxy/zap-stable zap-full-scan.py \
