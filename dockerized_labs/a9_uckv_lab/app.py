@@ -58,8 +58,9 @@ def upload_yaml():
 
     if file and allowed_file(file.filename):
         try:
-            # Intentionally vulnerable YAML loading
-            data = yaml.load(file.stream, Loader=yaml.Loader)
+            # Safe YAML loading: safe_load builds only basic Python types and
+            # refuses arbitrary object constructors.
+            data = yaml.safe_load(file.stream)
             return render_template("result.html", content=data, filename=file.filename)
         except Exception as e:
             flash(f"Error processing file: {str(e)}")
